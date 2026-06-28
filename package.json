@@ -1,0 +1,25 @@
+{
+  "name": "pilates-wa-agent",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "WhatsApp AI Agent for Pilates Tech Studio powered by KirimDev + DeepSeek",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "subscribe": "tsx src/subscribe-webhook.ts"
+  },
+  "dependencies": {
+    "@kirimdev/sdk": "^3.3.0",
+    "@supabase/supabase-js": "^2.108.2",
+    "dotenv": "^16.4.0",
+    "express": "^5.1.0",
+    "openai": "^4.80.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
