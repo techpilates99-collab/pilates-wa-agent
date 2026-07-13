@@ -1,12 +1,25 @@
 // ══════════════════════════════════════════════════
-// AI Module — DeepSeek integration with knowledge & memory
+// AI Module — DeepSeek conversation layer over the onmat.id booking API
+//
+// This file holds NO business logic: schedules, seat holds, packages,
+// payment links, and cancellation rules all live in the website's
+// /api/wa/* routes (see onmat-api.ts). The model's job is conversation +
+// relaying tool results (message_for_customer is always relayed verbatim).
 // ══════════════════════════════════════════════════
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import OpenAI from 'openai'
 import https from 'node:https'
-import { createClient } from '@supabase/supabase-js'
+import {
+  checkSchedules,
+  createBooking,
+  cancelBooking,
+  getStatus,
+  listPackages,
+  buyPackage,
+  fetchKnowledge,
+} from './onmat-api.js'
 
 // Custom fetch to bypass global fetch HTTP/2 / keep-alive socket reuse bugs in newer Node versions
 function customFetch(url: any, init: any): Promise<any> {
@@ -65,50 +78,43 @@ const ai = new OpenAI({
   fetch: customFetch
 })
 
-// ── Supabase client initialization ──
-let supabase: any = null
-if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
-}
-
-// ── Load knowledge base ──
+// ── Knowledge base: live from the onmat.id API, studio.txt as offline fallback ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let activeKnowledge = ''
 const localKnowledgePath = path.join(__dirname, '..', 'knowledge', 'studio.txt')
 
-// Load local fallback knowledge
 try {
   activeKnowledge = fs.readFileSync(localKnowledgePath, 'utf-8')
 } catch (err: any) {
   console.warn('⚠️ Gagal membaca local studio.txt:', err.message)
 }
 
-async function updateKnowledgeFromSupabase() {
-  if (!supabase) return
+async function updateKnowledge() {
   try {
-    const { data, error } = await supabase
-      .from('chatbot_settings')
-      .select('value')
-      .eq('key', 'studio_knowledge')
-      .single()
-
-    if (error) throw error
-    if (data && data.value) {
-      activeKnowledge = data.value
-      console.log('✅ Knowledge base updated from Supabase successfully!')
-    }
+    activeKnowledge = await fetchKnowledge()
+    console.log('✅ Knowledge base updated from onmat.id API')
   } catch (err: any) {
-    console.warn('⚠️ Gagal memuat knowledge dari Supabase, menggunakan cache/lokal:', err.message)
+    console.warn('⚠️ Gagal memuat knowledge dari API, pakai cache/lokal:', err.message)
   }
 }
 
-// Fetch at startup
-updateKnowledgeFromSupabase()
+updateKnowledge()
+setInterval(updateKnowledge, 10 * 60 * 1000)
 
-// Fetch every 10 minutes
-setInterval(updateKnowledgeFromSupabase, 10 * 60 * 1000)
+function todayBali(): string {
+  return new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Makassar',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date())
+}
 
-// Helper function to build prompt dynamically
+function todayBaliISO(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Makassar' }).format(new Date())
+}
+
 function getSystemPrompt() {
   return `
 ${activeKnowledge}
@@ -117,194 +123,122 @@ ${activeKnowledge}
   ATURAN MENJAWAB
 ═══════════════════════════════════
 
-1. Kamu adalah Lia, CS onmat (Pilates Tech Studio) di WhatsApp.
-2. Jawab dengan bahasa yang sama dengan pelanggan (bahasa Indonesia atau Inggris). Selalu ramah, santai tapi tetap profesional.
-3. Gunakan emoji secukupnya supaya terasa friendly 😊.
-4. Jawab berdasarkan informasi di atas — JANGAN mengarang info yang tidak ada.
-5. Jika ada pertanyaan yang tidak bisa kamu jawab (misal hal teknis medis), arahkan ke admin:
-   "Untuk pertanyaan ini, saya hubungkan ke admin kami ya kak! Mohon tunggu sebentar 🙏"
-6. JANGAN pernah bilang kamu AI/robot/bot — kamu adalah CS onmat/Lia.
-7. Jika customer mau booking kelas, tawarkan pilihan jadwal kelas yang tersedia dengan mencari tanggal yang mereka inginkan (menggunakan tool check_schedules) lalu tawarkan untuk buat booking langsung setelah menanyakan nama lengkap mereka (menggunakan tool create_wa_booking).
-8. Jika customer mau beli paket, jelaskan pilihan paket dan arahkan untuk transfer.
-9. Untuk pertanyaan harga, selalu sebutkan juga opsi Trial Class Rp 75.000 untuk yang belum pernah.
-10. Jawab singkat dan to-the-point — ini WhatsApp, bukan email. Max 3-4 paragraf pendek.
-11. Jika customer bilang terima kasih / bye, balas singkat dan ramah.
-12. Jika tidak yakin dengan jawaban, lebih baik bilang "Saya cek dulu ya kak" daripada salah info.
+1. Kamu adalah Lia, CS on mat. (onmat) di WhatsApp. Ramah, santai, tetap profesional. Jangan pernah bilang kamu AI/robot/bot.
+2. HARI INI: ${todayBali()} (${todayBaliISO()}, zona waktu Bali/WITA). Gunakan ini untuk menghitung "besok", "lusa", "Senin depan", dst.
+3. Jawab dengan bahasa yang sama dengan customer (Indonesia/Inggris). Gunakan emoji secukupnya. Singkat dan to-the-point — ini WhatsApp, max 3-4 paragraf pendek. Format WhatsApp: bold pakai SATU bintang *seperti ini* — JANGAN pakai **dua bintang** (tidak dirender di WhatsApp).
+4. Jawab HANYA berdasarkan informasi di atas dan hasil tools. JANGAN mengarang jadwal, harga, atau kebijakan.
+5. ALUR BOOKING: (a) tahu tanggal yang diinginkan → panggil check_schedules; (b) tawarkan pilihan kelas + sisa slot; (c) pastikan nama lengkap customer (kalau dia sudah pernah booking, my_status sudah tahu namanya — jangan tanya ulang); (d) setelah customer konfirmasi satu kelas → create_booking.
+6. PENTING: kalau hasil tool berisi "message_for_customer", SAMPAIKAN isi itu APA ADANYA (boleh ditambah satu kalimat pembuka singkat). JANGAN mengubah/mengetik ulang link pembayaran, nominal, atau nomor rekening.
+7. Customer dengan paket aktif otomatis booking pakai paket (create_booking mengurusnya). Kalau dia minta bayar terpisah padahal punya paket, panggil create_booking dengan use_package=false.
+8. CANCEL: panggil my_status dulu untuk melihat booking dia, konfirmasi kelas mana yang dibatalkan, lalu cancel_booking dengan booking_id-nya. Pembatalan hanya bisa >= 12 jam sebelum kelas.
+9. RESCHEDULE: cancel dulu (aturan sama), lalu booking jadwal baru.
+10. Pertanyaan "kelas saya kapan" / "sisa paket saya berapa" → my_status. Pertanyaan harga paket → list_packages (atau info di atas). Beli paket → pastikan nama lengkap, lalu buy_package.
+11. Eskalasi ke admin (bilang "saya teruskan ke admin ya kak"): bukti transfer manual, refund, komplain, pertanyaan medis spesifik, partnership.
+12. Kalau tidak yakin, bilang "Saya cek dulu ya kak" — jangan salah info.
 `
 }
 
-// ── Database Helper Functions for AI tools ──
-
-async function checkSchedules(date: string) {
-  if (!supabase) throw new Error('Supabase client is not configured.')
-
-  const start = new Date(`${date}T00:00:00.000Z`).toISOString()
-  const end = new Date(new Date(`${date}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000 - 1).toISOString()
-
-  const { data, error } = await supabase
-    .from('schedules')
-    .select(`
-      id, start_at, capacity, price, status,
-      class_types ( name ),
-      bookings ( status )
-    `)
-    .eq('status', 'published')
-    .gte('start_at', start)
-    .lte('start_at', end)
-    .order('start_at', { ascending: true })
-
-  if (error) throw error
-  if (!data || data.length === 0) return { message: `Tidak ada kelas yang dijadwalkan pada tanggal ${date}.` }
-
-  return data.map((s: any) => {
-    const activeBookings = (s.bookings || []).filter((b: any) => ['pending', 'confirmed', 'attended'].includes(b.status))
-    const availableSlots = s.capacity - activeBookings.length
-
-    const timeString = new Date(s.start_at).toLocaleTimeString('id-ID', {
-      timeZone: 'Asia/Jakarta',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    })
-
-    return {
-      schedule_id: s.id,
-      class_name: s.class_types?.name || 'Pilates Class',
-      time: `${timeString} WIB`,
-      price: `Rp ${Number(s.price).toLocaleString('id-ID')}`,
-      available_slots: availableSlots > 0 ? availableSlots : 0,
-      is_full: availableSlots <= 0
-    }
-  })
-}
-
-async function createWaBooking(scheduleId: string, name: string, phone: string) {
-  if (!supabase) throw new Error('Supabase client is not configured.')
-
-  const normalizedPhone = phone.replace(/[^\d+]/g, '')
-
-  // 1. Get or create customer by phone
-  let { data: customer, error: cFetchErr } = await supabase
-    .from('customers')
-    .select('id')
-    .eq('phone', normalizedPhone)
-    .maybeSingle()
-
-  if (cFetchErr) throw cFetchErr
-
-  if (!customer) {
-    const { data: newCustomer, error: cInsErr } = await supabase
-      .from('customers')
-      .insert({ name: name, phone: normalizedPhone, source_channel: 'wa' })
-      .select('id')
-      .single()
-
-    if (cInsErr) throw cInsErr
-    customer = newCustomer
-  }
-
-  // 2. Fetch schedule details & verify capacity
-  const { data: schedule, error: sErr } = await supabase
-    .from('schedules')
-    .select(`
-      id, capacity, price, status,
-      class_types ( name ),
-      bookings ( status )
-    `)
-    .eq('id', scheduleId)
-    .single()
-
-  if (sErr || !schedule) throw new Error('Jadwal kelas tidak ditemukan.')
-  if (schedule.status !== 'published') throw new Error('Jadwal kelas ini tidak aktif.')
-
-  const activeBookings = (schedule.bookings || []).filter((b: any) => ['pending', 'confirmed', 'attended'].includes(b.status))
-  const availableSlots = schedule.capacity - activeBookings.length
-
-  if (availableSlots <= 0) {
-    throw new Error('Maaf, kelas ini sudah penuh.')
-  }
-
-  // 3. Create booking
-  const { data: booking, error: bErr } = await supabase
-    .from('bookings')
-    .insert({
-      customer_id: customer.id,
-      schedule_id: schedule.id,
-      status: 'pending',
-      source: 'wa'
-    })
-    .select('id')
-    .single()
-
-  if (bErr) throw bErr
-
-  // 4. Create Midtrans Transaction Snap Link
-  const midtransServerKey = process.env.MIDTRANS_SERVER_KEY
-  if (!midtransServerKey) {
-    console.warn('⚠️ MIDTRANS_SERVER_KEY tidak ditemukan di environment. Booking terbuat tetapi link pembayaran gagal.')
-    return {
-      booking_id: booking.id,
-      message: 'Booking berhasil dibuat (Pending). Silakan hubungi admin untuk pembayaran karena metode pembayaran otomatis belum dikonfigurasi.'
-    }
-  }
-
-  const isProd = process.env.MIDTRANS_IS_PRODUCTION === 'true'
-  const SNAP_BASE = isProd
-    ? 'https://app.midtrans.com/snap/v1'
-    : 'https://app.sandbox.midtrans.com/snap/v1'
-
-  const auth = Buffer.from(`${midtransServerKey}:`).toString('base64')
-
-  const nameParts = name.trim().split(/\s+/)
-  const firstName = nameParts[0]
-  const lastName = nameParts.slice(1).join(' ') || firstName
-
-  const payload = {
-    transaction_details: {
-      order_id: `booking-${booking.id}`,
-      gross_amount: Math.round(Number(schedule.price))
-    },
-    customer_details: {
-      first_name: firstName,
-      last_name: lastName,
-      phone: normalizedPhone
-    },
-    item_details: [
-      {
-        id: schedule.id,
-        name: (schedule.class_types?.name || 'Pilates Class').slice(0, 50),
-        price: Math.round(Number(schedule.price)),
-        quantity: 1
+// ── Tool definitions (DeepSeek function calling) ──
+const TOOLS: any[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'check_schedules',
+      description: 'Daftar kelas pada tanggal tertentu (waktu Bali/WITA) beserta sisa slot real-time dan harga. Selalu pakai ini sebelum menawarkan jadwal.',
+      parameters: {
+        type: 'object',
+        properties: {
+          date: { type: 'string', description: 'Tanggal dalam format YYYY-MM-DD, contoh: 2026-07-28' }
+        },
+        required: ['date']
       }
-    ],
-    expiry: {
-      duration: 24,
-      unit: 'hours'
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_booking',
+      description: 'Buat booking kelas untuk customer ini. Panggil hanya setelah customer mengonfirmasi kelas tertentu dan nama lengkapnya diketahui. schedule_id HARUS berupa UUID persis dari hasil check_schedules — JANGAN mengarang; kalau belum punya UUID-nya, panggil check_schedules dulu. Otomatis memakai paket aktif kalau ada; kalau tidak, mengembalikan link pembayaran.',
+      parameters: {
+        type: 'object',
+        properties: {
+          schedule_id: { type: 'string', description: 'UUID jadwal dari check_schedules' },
+          customer_name: { type: 'string', description: 'Nama lengkap customer' },
+          use_package: { type: 'boolean', description: 'Default true. Set false hanya kalau customer secara eksplisit tidak mau memakai paketnya.' }
+        },
+        required: ['schedule_id', 'customer_name']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'my_status',
+      description: 'Booking mendatang + paket aktif milik customer ini (berdasarkan nomor WhatsApp-nya). Pakai untuk "kelas saya kapan", "sisa sesi paket", dan untuk mengambil booking_id sebelum cancel.',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_booking',
+      description: 'Batalkan satu booking milik customer ini. Ambil booking_id dari my_status dan konfirmasi dulu kelas mana yang dibatalkan. Hanya bisa >= 12 jam sebelum kelas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          booking_id: { type: 'string', description: 'UUID booking dari my_status' }
+        },
+        required: ['booking_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_packages',
+      description: 'Katalog paket aktif (nama, harga, jumlah sesi, masa berlaku) langsung dari sistem.',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'buy_package',
+      description: 'Beli paket untuk customer ini — mengembalikan link pembayaran. Panggil setelah customer memilih paket dan nama lengkapnya diketahui.',
+      parameters: {
+        type: 'object',
+        properties: {
+          package_id: { type: 'string', description: 'UUID paket dari list_packages' },
+          customer_name: { type: 'string', description: 'Nama lengkap customer' }
+        },
+        required: ['package_id', 'customer_name']
+      }
     }
   }
+]
 
-  const response = await fetch(`${SNAP_BASE}/transactions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('Midtrans Snap creation failed:', response.status, errorText)
-    throw new Error(`Gagal membuat pembayaran Midtrans: ${errorText}`)
-  }
-
-  const snapData = await response.json() as { token: string, redirect_url: string }
-
-  return {
-    booking_id: booking.id,
-    payment_url: snapData.redirect_url,
-    message: 'Booking pending berhasil dibuat. Silakan lakukan pembayaran melalui link pembayaran Midtrans.'
+async function runTool(name: string, args: any, phone: string): Promise<string> {
+  try {
+    switch (name) {
+      case 'check_schedules':
+        return JSON.stringify(await checkSchedules(args.date))
+      case 'create_booking':
+        return JSON.stringify(
+          await createBooking(args.schedule_id, args.customer_name, phone, args.use_package),
+        )
+      case 'my_status':
+        return JSON.stringify(await getStatus(phone))
+      case 'cancel_booking':
+        return JSON.stringify(await cancelBooking(phone, args.booking_id))
+      case 'list_packages':
+        return JSON.stringify(await listPackages())
+      case 'buy_package':
+        return JSON.stringify(await buyPackage(args.package_id, args.customer_name, phone))
+      default:
+        return JSON.stringify({ error: `Tool tidak dikenal: ${name}` })
+    }
+  } catch (err: any) {
+    return JSON.stringify({ error: err.message })
   }
 }
 
@@ -329,110 +263,62 @@ setInterval(() => {
 // Generate AI Reply
 // ══════════════════════════════════════════════════
 export async function generateReply(userId: string, userMessage: string): Promise<string> {
-  // Get or create conversation history
   if (!conversations.has(userId)) {
     conversations.set(userId, [])
   }
   const history = conversations.get(userId)!
   lastActivity.set(userId, Date.now())
 
-  // Add user message
   history.push({ role: 'user', content: userMessage })
 
   // Keep only last 20 messages (10 exchanges) to save tokens
   const recentHistory = history.slice(-20)
 
   try {
-    let messages: any[] = [
+    const messages: any[] = [
       { role: 'system', content: getSystemPrompt() },
       ...recentHistory,
     ]
 
     let completion = await ai.chat.completions.create({
       model: 'deepseek-chat',
-      messages: messages,
-      tools: [
-        {
-          type: 'function',
-          function: {
-            name: 'check_schedules',
-            description: 'Mencari daftar jadwal kelas yang aktif pada tanggal tertentu (format YYYY-MM-DD) dan menghitung sisa slot kosong.',
-            parameters: {
-              type: 'object',
-              properties: {
-                date: { type: 'string', description: 'Tanggal kelas yang dicari dalam format YYYY-MM-DD, contoh: 2026-06-25' }
-              },
-              required: ['date']
-            }
-          }
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'create_wa_booking',
-            description: 'Membuat booking baru untuk kelas tertentu (schedule_id) atas nama customer. Hanya panggil jika user mengonfirmasi mau booking kelas tertentu dan sudah memberikan nama lengkapnya.',
-            parameters: {
-              type: 'object',
-              properties: {
-                schedule_id: { type: 'string', description: 'UUID dari jadwal kelas yang dipilih (dapat diperoleh dari check_schedules)' },
-                customer_name: { type: 'string', description: 'Nama lengkap customer yang melakukan booking' }
-              },
-              required: ['schedule_id', 'customer_name']
-            }
-          }
-        }
-      ],
-      max_tokens: 500,
+      messages,
+      tools: TOOLS,
+      max_tokens: 800,
       temperature: 0.7,
     })
 
-    let message = completion.choices[0]?.message
+    // Multi-round tool loop: e.g. my_status → cancel_booking in one turn.
+    let rounds = 0
+    while (completion.choices[0]?.message?.tool_calls?.length && rounds < 3) {
+      const message = completion.choices[0].message
+      messages.push(message)
 
-    // If DeepSeek requests a tool call
-    if (message?.tool_calls && message.tool_calls.length > 0) {
-      console.log(`🤖 DeepSeek memanggil tool: ${message.tool_calls[0].function.name} dengan argumen ${message.tool_calls[0].function.arguments}`)
-      messages.push(message) // Add assistant's tool call request
-
-      for (const toolCall of message.tool_calls) {
+      for (const toolCall of message.tool_calls!) {
         const name = toolCall.function.name
-        const args = JSON.parse(toolCall.function.arguments)
-
-        let result = ''
-        if (name === 'check_schedules') {
-          try {
-            const schedules = await checkSchedules(args.date)
-            result = JSON.stringify(schedules)
-          } catch (err: any) {
-            result = JSON.stringify({ error: err.message })
-          }
-        } else if (name === 'create_wa_booking') {
-          try {
-            const bookingResult = await createWaBooking(args.schedule_id, args.customer_name, userId)
-            result = JSON.stringify(bookingResult)
-          } catch (err: any) {
-            result = JSON.stringify({ error: err.message })
-          }
-        }
+        let args: any = {}
+        try { args = JSON.parse(toolCall.function.arguments || '{}') } catch { /* empty args */ }
+        console.log(`🤖 Tool: ${name}(${toolCall.function.arguments}) untuk +${userId}`)
 
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: result
+          content: await runTool(name, args, userId),
         })
       }
 
-      // Call DeepSeek again with the tool output
+      rounds++
       completion = await ai.chat.completions.create({
         model: 'deepseek-chat',
-        messages: messages,
-        max_tokens: 500,
-        temperature: 0.7
+        messages,
+        tools: rounds < 3 ? TOOLS : undefined,
+        max_tokens: 800,
+        temperature: 0.7,
       })
     }
 
     const reply = completion.choices[0]?.message?.content?.trim() || 'Maaf kak, ada gangguan teknis. Coba chat lagi ya! 🙏'
 
-    // Save AI reply to history
     history.push({ role: 'assistant', content: reply })
 
     return reply
