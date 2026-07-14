@@ -4,7 +4,7 @@
 import 'dotenv/config'
 import { generateReply } from './src/ai.js'
 
-const PHONE = '6289900012345' // fake test number, cleaned up after the test
+const PHONE = process.env.TEST_PHONE || '6289900012345' // fake test number, cleaned up after the test
 
 const turns = process.argv.slice(2).length
   ? [process.argv.slice(2).join(' ')]

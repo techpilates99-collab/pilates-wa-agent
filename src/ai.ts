@@ -18,6 +18,7 @@ import {
   getStatus,
   listPackages,
   buyPackage,
+  registerAccount,
   fetchKnowledge,
 } from './onmat-api.js'
 
@@ -128,6 +129,7 @@ ${activeKnowledge}
 3. Jawab dengan bahasa yang sama dengan customer (Indonesia/Inggris). Gunakan emoji secukupnya. Singkat dan to-the-point — ini WhatsApp, max 3-4 paragraf pendek. Format WhatsApp: bold pakai SATU bintang *seperti ini* — JANGAN pakai **dua bintang** (tidak dirender di WhatsApp).
 4. Jawab HANYA berdasarkan informasi di atas dan hasil tools. JANGAN mengarang jadwal, harga, atau kebijakan.
 5. ALUR BOOKING: (a) tahu tanggal yang diinginkan → panggil check_schedules; (b) tawarkan pilihan kelas + sisa slot; (c) pastikan nama lengkap customer (kalau dia sudah pernah booking, my_status sudah tahu namanya — jangan tanya ulang); (d) setelah customer konfirmasi satu kelas → create_booking.
+5b. WAJIB AKUN: semua booking dan pembelian paket butuh akun. Kalau create_booking / buy_package mengembalikan error "not-registered", minta nama lengkap DAN email customer, lalu panggil register_account, lalu ULANGI create_booking/buy_package-nya di giliran yang sama. Kalau my_status bilang nomor belum terdaftar dan customer mau booking, langsung mulai pendaftaran. Jangan pernah menolak customer karena belum punya akun — daftarin aja di chat, prosesnya 30 detik.
 6. PENTING: kalau hasil tool berisi "message_for_customer", SAMPAIKAN isi itu APA ADANYA (boleh ditambah satu kalimat pembuka singkat). JANGAN mengubah/mengetik ulang link pembayaran, nominal, atau nomor rekening.
 7. Customer dengan paket aktif otomatis booking pakai paket (create_booking mengurusnya). Kalau dia minta bayar terpisah padahal punya paket, panggil create_booking dengan use_package=false.
 8. CANCEL: panggil my_status dulu untuk melihat booking dia, konfirmasi kelas mana yang dibatalkan, lalu cancel_booking dengan booking_id-nya. Pembatalan hanya bisa >= 12 jam sebelum kelas.
@@ -167,6 +169,21 @@ const TOOLS: any[] = [
           use_package: { type: 'boolean', description: 'Default true. Set false hanya kalau customer secara eksplisit tidak mau memakai paketnya.' }
         },
         required: ['schedule_id', 'customer_name']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'register_account',
+      description: 'Daftarkan akun untuk customer ini (wajib sebelum booking pertama / beli paket). Panggil HANYA setelah customer memberikan nama lengkap DAN email. Nomor WhatsApp otomatis terverifikasi dari chat ini.',
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_name: { type: 'string', description: 'Nama lengkap customer' },
+          email: { type: 'string', description: 'Alamat email customer' }
+        },
+        required: ['customer_name', 'email']
       }
     }
   },
@@ -226,6 +243,8 @@ async function runTool(name: string, args: any, phone: string): Promise<string> 
         return JSON.stringify(
           await createBooking(args.schedule_id, args.customer_name, phone, args.use_package),
         )
+      case 'register_account':
+        return JSON.stringify(await registerAccount(args.customer_name, args.email, phone))
       case 'my_status':
         return JSON.stringify(await getStatus(phone))
       case 'cancel_booking':

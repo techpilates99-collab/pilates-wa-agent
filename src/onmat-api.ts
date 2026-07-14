@@ -37,6 +37,14 @@ export function checkSchedules(date: string) {
   return api(`/schedules?date=${encodeURIComponent(date)}`)
 }
 
+/** Wajib sebelum booking/beli paket: bikin akun penuh dari dalam chat. */
+export function registerAccount(customerName: string, email: string, phone: string) {
+  return api('/register', {
+    method: 'POST',
+    body: { phone, name: customerName, email },
+  })
+}
+
 export function createBooking(
   scheduleId: string,
   customerName: string,
