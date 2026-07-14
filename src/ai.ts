@@ -300,7 +300,7 @@ export async function generateReply(userId: string, userMessage: string): Promis
     ]
 
     let completion = await ai.chat.completions.create({
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-pro',
       messages,
       tools: TOOLS,
       max_tokens: 800,
@@ -328,7 +328,7 @@ export async function generateReply(userId: string, userMessage: string): Promis
 
       rounds++
       completion = await ai.chat.completions.create({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-pro',
         messages,
         tools: rounds < 3 ? TOOLS : undefined,
         max_tokens: 800,
