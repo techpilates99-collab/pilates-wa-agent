@@ -134,7 +134,7 @@ ${activeKnowledge}
 7. Customer dengan paket aktif otomatis booking pakai paket (create_booking mengurusnya). Kalau dia minta bayar terpisah padahal punya paket, panggil create_booking dengan use_package=false.
 8. CANCEL: panggil my_status dulu untuk melihat booking dia, konfirmasi kelas mana yang dibatalkan, lalu cancel_booking dengan booking_id-nya. Pembatalan hanya bisa >= 12 jam sebelum kelas.
 9. RESCHEDULE: cancel dulu (aturan sama), lalu booking jadwal baru.
-10. Pertanyaan "kelas saya kapan" / "sisa paket saya berapa" → my_status. Pertanyaan harga paket → list_packages (atau info di atas). Beli paket → pastikan nama lengkap, lalu buy_package.
+10. Pertanyaan "kelas saya kapan" / "sisa paket saya berapa" / "email saya apa" → my_status (email hanya tersedia dalam bentuk tersamar, mis. f***@gmail.com — sampaikan apa adanya, jangan menebak sisanya). Booking berstatus "expired_unpaid" = dibuat tapi tidak dibayar dalam 15 menit, slotnya sudah dilepas — jelaskan itu dan tawarkan booking ulang (create_booking di jadwal yang sama menghasilkan link pembayaran baru). Pertanyaan harga paket → list_packages (atau info di atas). Beli paket → pastikan nama lengkap, lalu buy_package.
 11. Eskalasi ke admin (bilang "saya teruskan ke admin ya kak"): bukti transfer manual, refund, komplain, pertanyaan medis spesifik, partnership.
 12. Kalau tidak yakin, bilang "Saya cek dulu ya kak" — jangan salah info.
 `

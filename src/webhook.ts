@@ -101,15 +101,19 @@ export async function handleWebhook(req: Request, res: Response) {
 
       console.log(`📩 [${new Date().toLocaleTimeString('id-ID')}] Pesan dari +${from}: ${msg.text?.body ?? `[${msgType}]`}`)
 
-      // Handle non-text messages
+      // Handle non-text messages. Customers are told to send transfer proof
+      // to this chat (manual-transfer fallback), so images must be
+      // acknowledged usefully — not rejected with "text only".
       if (msgType !== 'text' || !msg.text?.body) {
+        const body =
+          msgType === 'image' || msgType === 'document'
+            ? 'Terima kasih kak, sudah kami terima 🙏 Kalau ini bukti transfer, admin kami akan cek dan konfirmasi secepatnya ya. Untuk pertanyaan atau booking, silakan ketik pesan teks.'
+            : 'Hai! 😊 Saat ini saya hanya bisa membalas pesan teks. Silakan ketik pertanyaan kamu ya!'
         await phone.messages.send({
           messaging_product: 'whatsapp',
           to: from,
           type: 'text',
-          text: {
-            body: 'Hai! 😊 Saat ini saya hanya bisa membalas pesan teks. Silakan ketik pertanyaan kamu ya!',
-          },
+          text: { body },
         })
         continue
       }
