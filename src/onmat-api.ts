@@ -51,6 +51,7 @@ export function createBooking(
   phone: string,
   usePackage?: boolean,
   promoCode?: string,
+  guestNames?: string[],
 ) {
   return api('/bookings', {
     method: 'POST',
@@ -60,12 +61,26 @@ export function createBooking(
       schedule_id: scheduleId,
       use_package: usePackage,
       promo_code: promoCode,
+      guest_names: guestNames,
     },
   })
 }
 
 export function cancelBooking(phone: string, bookingId: string) {
   return api('/bookings/cancel', { method: 'POST', body: { phone, booking_id: bookingId } })
+}
+
+/** Pindah booking ke jadwal lain dalam satu langkah (>=12 jam, harga sama). */
+export function rescheduleBooking(phone: string, bookingId: string, newScheduleId: string) {
+  return api('/bookings/reschedule', {
+    method: 'POST',
+    body: { phone, booking_id: bookingId, new_schedule_id: newScheduleId },
+  })
+}
+
+/** Masuk antrian kelas penuh — notifikasi slot kosong dikirim via email. */
+export function joinWaitlist(phone: string, scheduleId: string) {
+  return api('/waitlist', { method: 'POST', body: { phone, schedule_id: scheduleId } })
 }
 
 export function getStatus(phone: string) {

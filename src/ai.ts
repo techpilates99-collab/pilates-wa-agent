@@ -15,6 +15,8 @@ import {
   checkSchedules,
   createBooking,
   cancelBooking,
+  rescheduleBooking,
+  joinWaitlist,
   getStatus,
   listPackages,
   buyPackage,
@@ -132,10 +134,13 @@ ${activeKnowledge}
 5b. WAJIB AKUN: semua booking dan pembelian paket butuh akun. Kalau create_booking / buy_package mengembalikan error "not-registered", minta nama lengkap DAN email customer, lalu panggil register_account, lalu ULANGI create_booking/buy_package-nya di giliran yang sama. Kalau my_status bilang nomor belum terdaftar dan customer mau booking, langsung mulai pendaftaran. Jangan pernah menolak customer karena belum punya akun — daftarin aja di chat, prosesnya 30 detik.
 6. PENTING: kalau hasil tool berisi "message_for_customer", SAMPAIKAN isi itu APA ADANYA (boleh ditambah satu kalimat pembuka singkat). JANGAN mengubah/mengetik ulang link pembayaran, nominal, atau nomor rekening.
 7. Customer dengan paket aktif otomatis booking pakai paket (create_booking mengurusnya). Kalau dia minta bayar terpisah padahal punya paket, panggil create_booking dengan use_package=false.
-8. CANCEL: panggil my_status dulu untuk melihat booking dia, konfirmasi kelas mana yang dibatalkan, lalu cancel_booking dengan booking_id-nya. Pembatalan hanya bisa >= 12 jam sebelum kelas.
-9. RESCHEDULE: cancel dulu (aturan sama), lalu booking jadwal baru.
+8. CANCEL: panggil my_status dulu untuk melihat booking dia, konfirmasi kelas mana yang dibatalkan, lalu cancel_booking dengan booking_id-nya. Pembatalan hanya bisa >= 12 jam sebelum kelas. Pembayaran drop-in otomatis jadi saldo credit.
+9. RESCHEDULE: pakai tool reschedule_booking SATU langkah (booking_id dari my_status + jadwal baru dari check_schedules) — pembayaran/sesi paket ikut pindah, JANGAN cancel-lalu-booking-ulang kecuali harga kelasnya beda (sistem akan memberitahu). Konfirmasi dulu jadwal tujuannya ke customer.
+9b. KELAS PENUH: kalau create_booking gagal karena class-full, tawarkan waitlist (tool join_waitlist). Notifikasi slot kosong dikirim via EMAIL akun customer dengan waktu klaim 1 jam.
+9c. BAWA TEMAN: customer bisa booking sekaligus untuk teman (maks 3) — cukup NAMA teman, tanpa akun. Teruskan lewat guest_names di create_booking. Harga drop-in per orang, satu link pembayaran. Sesi paket tidak bisa dipakai kalau bawa teman (semua drop-in) — beri tahu kalau dia punya paket. Teman isi pernyataan kesehatan di studio saat check-in.
 10. Pertanyaan "kelas saya kapan" / "sisa paket saya berapa" / "email saya apa" → my_status (email hanya tersedia dalam bentuk tersamar, mis. f***@gmail.com — sampaikan apa adanya, jangan menebak sisanya). Booking berstatus "expired_unpaid" = dibuat tapi tidak dibayar dalam 15 menit, slotnya sudah dilepas — jelaskan itu dan tawarkan booking ulang (create_booking di jadwal yang sama menghasilkan link pembayaran baru). Pertanyaan harga paket → list_packages (atau info di atas). Beli paket → pastikan nama lengkap, lalu buy_package.
 10b. VOUCHER: kode promo BISA dipakai di chat ini. Kalau customer menyebut punya kode, minta kodenya lalu teruskan lewat parameter promo_code di create_booking / buy_package — sistem yang memvalidasi. Kode tidak valid akan dijawab sistem dengan alasannya; tawarkan lanjut harga normal atau coba kode lain. JANGAN PERNAH bilang sistem voucher tidak ada.
+10c. SALDO CREDIT: cancel booking berbayar (>=12 jam sebelum kelas) otomatis jadi saldo credit rupiah (tidak kadaluarsa, tidak bisa dicairkan). Saldo otomatis kepakai saat booking/beli paket berikutnya — kamu tidak perlu melakukan apa pun, sistem yang memotong; kalau saldo menutup penuh, booking langsung confirmed tanpa link pembayaran. Saldo customer terlihat di my_status (credit_balance). Kalau ditanya "saldo saya berapa", panggil my_status. JANGAN PERNAH bilang sistem credit tidak ada.
 11. Eskalasi ke admin (bilang "saya teruskan ke admin ya kak"): bukti transfer manual, refund, komplain, pertanyaan medis spesifik, partnership.
 12. Kalau tidak yakin, bilang "Saya cek dulu ya kak" — jangan salah info.
 `
@@ -168,7 +173,8 @@ const TOOLS: any[] = [
           schedule_id: { type: 'string', description: 'UUID jadwal dari check_schedules' },
           customer_name: { type: 'string', description: 'Nama lengkap customer' },
           use_package: { type: 'boolean', description: 'Default true. Set false hanya kalau customer secara eksplisit tidak mau memakai paketnya.' },
-          promo_code: { type: 'string', description: 'Kode voucher/promo dari customer, teruskan APA ADANYA (jangan diubah). Sistem yang memvalidasi.' }
+          promo_code: { type: 'string', description: 'Kode voucher/promo dari customer, teruskan APA ADANYA (jangan diubah). Sistem yang memvalidasi.' },
+          guest_names: { type: 'array', items: { type: 'string' }, description: 'BAWA TEMAN: daftar nama teman (maks 3) kalau customer mau booking sekaligus untuk temannya. Teman tidak perlu akun — cukup nama. Harga drop-in per orang, SATU link pembayaran. Catatan: kalau bawa teman, sesi paket TIDAK dipakai (semua bayar drop-in).' }
         },
         required: ['schedule_id', 'customer_name']
       }
@@ -214,6 +220,35 @@ const TOOLS: any[] = [
   {
     type: 'function',
     function: {
+      name: 'reschedule_booking',
+      description: 'Pindahkan satu booking ke jadwal lain dalam SATU langkah — pembayaran/sesi paket ikut pindah, tanpa bayar ulang. Ambil booking_id dari my_status dan schedule tujuan dari check_schedules, konfirmasi dulu ke customer. Syarat: >= 12 jam sebelum kelas lama, jadwal tujuan masih ada slot, harga sama.',
+      parameters: {
+        type: 'object',
+        properties: {
+          booking_id: { type: 'string', description: 'UUID booking dari my_status' },
+          new_schedule_id: { type: 'string', description: 'UUID jadwal tujuan dari check_schedules' }
+        },
+        required: ['booking_id', 'new_schedule_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'join_waitlist',
+      description: 'Masukkan customer ke waitlist kelas yang PENUH. Begitu ada slot kosong, sistem otomatis kirim EMAIL ke akun customer (bukan WA) dengan waktu klaim 1 jam. Tawarkan ini setiap create_booking gagal karena class-full.',
+      parameters: {
+        type: 'object',
+        properties: {
+          schedule_id: { type: 'string', description: 'UUID jadwal (kelas penuh) dari check_schedules' }
+        },
+        required: ['schedule_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_packages',
       description: 'Katalog paket aktif (nama, harga, jumlah sesi, masa berlaku) langsung dari sistem.',
       parameters: { type: 'object', properties: {} }
@@ -250,6 +285,7 @@ async function runTool(name: string, args: any, phone: string): Promise<string> 
             phone,
             args.use_package,
             args.promo_code,
+            args.guest_names,
           ),
         )
       case 'register_account':
@@ -258,6 +294,12 @@ async function runTool(name: string, args: any, phone: string): Promise<string> 
         return JSON.stringify(await getStatus(phone))
       case 'cancel_booking':
         return JSON.stringify(await cancelBooking(phone, args.booking_id))
+      case 'reschedule_booking':
+        return JSON.stringify(
+          await rescheduleBooking(phone, args.booking_id, args.new_schedule_id),
+        )
+      case 'join_waitlist':
+        return JSON.stringify(await joinWaitlist(phone, args.schedule_id))
       case 'list_packages':
         return JSON.stringify(await listPackages(phone))
       case 'buy_package':
