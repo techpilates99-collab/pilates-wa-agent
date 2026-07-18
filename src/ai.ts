@@ -250,7 +250,7 @@ async function runTool(name: string, args: any, phone: string): Promise<string> 
       case 'cancel_booking':
         return JSON.stringify(await cancelBooking(phone, args.booking_id))
       case 'list_packages':
-        return JSON.stringify(await listPackages())
+        return JSON.stringify(await listPackages(phone))
       case 'buy_package':
         return JSON.stringify(await buyPackage(args.package_id, args.customer_name, phone))
       default:

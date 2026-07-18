@@ -65,8 +65,8 @@ export function getStatus(phone: string) {
   return api(`/customers?phone=${encodeURIComponent(phone)}`)
 }
 
-export function listPackages() {
-  return api('/packages')
+export function listPackages(phone?: string) {
+  return api(phone ? `/packages?phone=${encodeURIComponent(phone)}` : '/packages')
 }
 
 export function buyPackage(packageId: string, customerName: string, phone: string) {
