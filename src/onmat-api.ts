@@ -50,10 +50,17 @@ export function createBooking(
   customerName: string,
   phone: string,
   usePackage?: boolean,
+  promoCode?: string,
 ) {
   return api('/bookings', {
     method: 'POST',
-    body: { phone, name: customerName, schedule_id: scheduleId, use_package: usePackage },
+    body: {
+      phone,
+      name: customerName,
+      schedule_id: scheduleId,
+      use_package: usePackage,
+      promo_code: promoCode,
+    },
   })
 }
 
@@ -69,10 +76,15 @@ export function listPackages(phone?: string) {
   return api(phone ? `/packages?phone=${encodeURIComponent(phone)}` : '/packages')
 }
 
-export function buyPackage(packageId: string, customerName: string, phone: string) {
+export function buyPackage(
+  packageId: string,
+  customerName: string,
+  phone: string,
+  promoCode?: string,
+) {
   return api('/packages/purchase', {
     method: 'POST',
-    body: { phone, name: customerName, package_id: packageId },
+    body: { phone, name: customerName, package_id: packageId, promo_code: promoCode },
   })
 }
 

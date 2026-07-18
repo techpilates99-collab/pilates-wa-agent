@@ -135,6 +135,7 @@ ${activeKnowledge}
 8. CANCEL: panggil my_status dulu untuk melihat booking dia, konfirmasi kelas mana yang dibatalkan, lalu cancel_booking dengan booking_id-nya. Pembatalan hanya bisa >= 12 jam sebelum kelas.
 9. RESCHEDULE: cancel dulu (aturan sama), lalu booking jadwal baru.
 10. Pertanyaan "kelas saya kapan" / "sisa paket saya berapa" / "email saya apa" → my_status (email hanya tersedia dalam bentuk tersamar, mis. f***@gmail.com — sampaikan apa adanya, jangan menebak sisanya). Booking berstatus "expired_unpaid" = dibuat tapi tidak dibayar dalam 15 menit, slotnya sudah dilepas — jelaskan itu dan tawarkan booking ulang (create_booking di jadwal yang sama menghasilkan link pembayaran baru). Pertanyaan harga paket → list_packages (atau info di atas). Beli paket → pastikan nama lengkap, lalu buy_package.
+10b. VOUCHER: kode promo BISA dipakai di chat ini. Kalau customer menyebut punya kode, minta kodenya lalu teruskan lewat parameter promo_code di create_booking / buy_package — sistem yang memvalidasi. Kode tidak valid akan dijawab sistem dengan alasannya; tawarkan lanjut harga normal atau coba kode lain. JANGAN PERNAH bilang sistem voucher tidak ada.
 11. Eskalasi ke admin (bilang "saya teruskan ke admin ya kak"): bukti transfer manual, refund, komplain, pertanyaan medis spesifik, partnership.
 12. Kalau tidak yakin, bilang "Saya cek dulu ya kak" — jangan salah info.
 `
@@ -166,7 +167,8 @@ const TOOLS: any[] = [
         properties: {
           schedule_id: { type: 'string', description: 'UUID jadwal dari check_schedules' },
           customer_name: { type: 'string', description: 'Nama lengkap customer' },
-          use_package: { type: 'boolean', description: 'Default true. Set false hanya kalau customer secara eksplisit tidak mau memakai paketnya.' }
+          use_package: { type: 'boolean', description: 'Default true. Set false hanya kalau customer secara eksplisit tidak mau memakai paketnya.' },
+          promo_code: { type: 'string', description: 'Kode voucher/promo dari customer, teruskan APA ADANYA (jangan diubah). Sistem yang memvalidasi.' }
         },
         required: ['schedule_id', 'customer_name']
       }
@@ -221,12 +223,13 @@ const TOOLS: any[] = [
     type: 'function',
     function: {
       name: 'buy_package',
-      description: 'Beli paket untuk customer ini — mengembalikan link pembayaran. Panggil setelah customer memilih paket dan nama lengkapnya diketahui.',
+      description: 'Beli paket untuk customer ini — mengembalikan link pembayaran (atau langsung aktif kalau voucher 100%). Panggil setelah customer memilih paket dan nama lengkapnya diketahui.',
       parameters: {
         type: 'object',
         properties: {
           package_id: { type: 'string', description: 'UUID paket dari list_packages' },
-          customer_name: { type: 'string', description: 'Nama lengkap customer' }
+          customer_name: { type: 'string', description: 'Nama lengkap customer' },
+          promo_code: { type: 'string', description: 'Kode voucher/promo dari customer, teruskan APA ADANYA (jangan diubah). Sistem yang memvalidasi.' }
         },
         required: ['package_id', 'customer_name']
       }
@@ -241,7 +244,13 @@ async function runTool(name: string, args: any, phone: string): Promise<string> 
         return JSON.stringify(await checkSchedules(args.date))
       case 'create_booking':
         return JSON.stringify(
-          await createBooking(args.schedule_id, args.customer_name, phone, args.use_package),
+          await createBooking(
+            args.schedule_id,
+            args.customer_name,
+            phone,
+            args.use_package,
+            args.promo_code,
+          ),
         )
       case 'register_account':
         return JSON.stringify(await registerAccount(args.customer_name, args.email, phone))
@@ -252,7 +261,9 @@ async function runTool(name: string, args: any, phone: string): Promise<string> 
       case 'list_packages':
         return JSON.stringify(await listPackages(phone))
       case 'buy_package':
-        return JSON.stringify(await buyPackage(args.package_id, args.customer_name, phone))
+        return JSON.stringify(
+          await buyPackage(args.package_id, args.customer_name, phone, args.promo_code),
+        )
       default:
         return JSON.stringify({ error: `Tool tidak dikenal: ${name}` })
     }
